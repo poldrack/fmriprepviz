@@ -4,7 +4,7 @@ Build a flipbook movie from an fMRIPrep subject's `space-T1w` BOLD reference
 images, with the cortical ribbon overlaid in red, to assess BOLD-to-anatomical
 registration across sessions.
 
-Every frame shows the same anatomical cuts and the same surface contours, so
+Every frame shows the same anatomical cuts and the same red contours, so
 anything that appears to move as the movie plays is misregistration.
 
 ## Requirements
@@ -78,8 +78,7 @@ uv run fmriprepviz derivatives/out/fmriprep \
 ```
 
 The tool searches for the cortical ribbon in the order described in "Where the
-contours come from" below. If no source is found it lists every path it tried,
-so you can see what it expected.
+contours come from" below. If all sources fail it reports what was tried.
 
 ## Use
 
@@ -98,8 +97,8 @@ Useful options:
 | `--task rest`           | restrict to this task                                                                                                                                                                                                  |
 | `--run 1`               | restrict to this run                                                                                                                                                                                                   |
 | `--ribbon PATH`         | cortical ribbon mask (binary or float) already in the T1w space                                                                                                                                                        |
-| `--fs-dir PATH`         | FreeSurfer **subject** directory (the one containing `mri/ribbon.mgz`). The ribbon will be moved into the T1w space.                                                                                                   |
-| `--fs-to-t1w-xfm PATH`  | `from-fsnative_to-T1w` transform to move FreeSurfer's ribbon into the T1w space, when `--fs-dir` is given                                                                                                              |
+| `--fs-dir PATH`         | FreeSurfer **subject** directory (the one containing `mri/ribbon.mgz`). Specifies an explicit path; alone selects the FreeSurfer path.                                                                                 |
+| `--fs-to-t1w-xfm PATH`  | `from-fsnative_to-T1w` transform to move FreeSurfer's ribbon into the T1w space. Alone selects the FreeSurfer path with auto-discovered FreeSurfer directory; with `--fs-dir`, uses that directory.                    |
 | `--n-cuts 7`            | cuts per orientation (default 1). One cut per orientation gives three large slices through the centre of the brain, side by side. Higher values give more coverage in smaller panels, stacked one row per orientation. |
 | `--display-mode z`      | orientations to show, letters from `x`, `y`, `z`                                                                                                                                                                       |
 | `--cut-coords -20 0 20` | explicit cuts in mm; needs a single `--display-mode`                                                                                                                                                                   |
@@ -136,9 +135,9 @@ pial.
 
 ## Scope
 
-Only `space-T1w` boldrefs are supported. FreeSurfer surfaces exist solely in
+Only `space-T1w` boldrefs are supported. The cortical ribbon exists solely in
 the subject's native anatomical space, so template spaces such as
-`MNI152NLin2009cAsym` would require warping the surfaces, which this tool does
+`MNI152NLin2009cAsym` would require warping the ribbon, which this tool does
 not do.
 
 ## Development
