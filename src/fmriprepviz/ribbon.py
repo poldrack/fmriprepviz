@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import nibabel as nib
+import nitransforms as nt
 import numpy as np
+from nitransforms.resampling import apply as nt_apply
 
 from fmriprepviz.discovery import AnatNotFoundError, find_unique_anat
 
@@ -132,9 +134,64 @@ def load_ribbon_mask(
 
 
 def _ribbon_from_freesurfer(derivatives_root, subject: str, fs_dir, xfm):
-    raise FreeSurferNotFoundError(
-        "Building the ribbon from FreeSurfer is not implemented yet."
+    """Build the ribbon mask from FreeSurfer, moved into the T1w space.
+
+    Resampling rather than composing the transform into the affine is
+    deliberate: it puts this mask on the same grid as fMRIPrep's own
+    desc-ribbon_mask, so nothing downstream can behave differently depending
+    on which path produced it. The cost is sub-voxel -- around 0.3 mm against
+    a BOLD voxel several times that.
+    """
+    t1w_path = find_unique_anat(derivatives_root, subject, T1W_PATTERN)
+    xfm_path = (
+        Path(xfm)
+        if xfm is not None
+        else find_unique_anat(derivatives_root, subject, FS_TO_T1W_PATTERN)
     )
+    ribbon_path = (
+        resolve_fs_dir(derivatives_root, subject, fs_dir) / RIBBON_RELATIVE_PATH
+    )
+    ribbon_img = nib.load(ribbon_path)
+    data = np.asarray(ribbon_img.dataobj)
+    _require_gray_matter_labels(data, ribbon_path)
+
+    gray = nib.Nifti1Image(
+        np.isin(data, RIBBON_LABELS).astype(np.uint8), ribbon_img.affine
+    )
+    # The ITK file stores the point map from the T1w (fixed) image to fsnative
+    # (moving), which is the direction resampling.apply pulls, so it is used
+    # as loaded. Inverting it here would displace the ribbon by twice the
+    # true offset, silently.
+    transform = nt.linear.load(xfm_path, fmt="itk")
+    aligned = nt_apply(
+        transform, gray, reference=nib.load(t1w_path), order=1
+    )
+    _require_overlap_on_the_t1w_grid(aligned, ribbon_path, xfm_path)
+    return aligned
+
+
+def _require_gray_matter_labels(data: np.ndarray, ribbon_path: Path) -> None:
+    """Fail clearly if none of the cortical gray labels are present."""
+    if not np.isin(data, RIBBON_LABELS).any():
+        raise FreeSurferNotFoundError(
+            f"{ribbon_path} contains none of the expected cortical gray "
+            f"matter labels {RIBBON_LABELS}. This usually means recon-all "
+            "failed, or --fs-dir points at a whole-brain segmentation "
+            "(aseg.mgz) rather than the cortical ribbon (ribbon.mgz)."
+        )
+
+
+def _require_overlap_on_the_t1w_grid(
+    mask_img, ribbon_path: Path, xfm_path: Path
+) -> None:
+    """Fail clearly when alignment leaves nothing on the T1w grid."""
+    if not (np.asarray(mask_img.dataobj) >= MASK_THRESHOLD).any():
+        raise FreeSurferNotFoundError(
+            f"No cortical gray matter from {ribbon_path} lands on the T1w "
+            f"grid after applying {xfm_path}. This usually means --fs-dir "
+            "points at a different subject, or that transform does not "
+            "relate these two images."
+        )
 
 
 def _mask_image(mask: np.ndarray, affine: np.ndarray) -> nib.Nifti1Image:
