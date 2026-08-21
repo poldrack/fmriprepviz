@@ -224,3 +224,11 @@ def surface_masks(derivatives):
     from fmriprepviz.ribbon import load_surface_masks, resolve_fs_dir
 
     return load_surface_masks(resolve_fs_dir(derivatives, "01"))
+
+
+@pytest.fixture(scope="session")
+def ribbon_mask(derivatives):
+    """The T1w-space cortical ribbon mask from the synthetic tree."""
+    from fmriprepviz.ribbon import load_ribbon_mask
+
+    return load_ribbon_mask(derivatives, "01")
