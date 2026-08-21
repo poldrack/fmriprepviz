@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from fmriprepviz.cli import build_parser, main
+from fmriprepviz.render import NO_OVERLAP_MESSAGE
 
 
 def test_parser_defaults():
@@ -55,40 +56,44 @@ def test_end_to_end_on_a_misaligned_tree(derivatives_misaligned, tmp_path):
     assert output.is_file()
 
 
-def test_explicit_fs_dir_uses_the_freesurfer_path(
-    derivatives_misaligned, tmp_path
-):
-    """--fs-dir must not be silently ignored because a desc-ribbon_mask
-    exists, or the FreeSurfer path would be unreachable on a complete tree
-    and could not be compared against the fast path at all.
+def test_explicit_fs_dir_uses_the_freesurfer_path(derivatives, tmp_path, capsys):
+    """--fs-dir must not be silently ignored just because a desc-ribbon_mask
+    is present. `derivatives` has one, so a passing --fs-dir case here could
+    not distinguish "the flag was honoured" from "the flag was dropped and
+    the fast path ran anyway" -- both would exit 0. Pointing --fs-dir at a
+    directory with no ribbon.mgz is the discriminating case: only actually
+    routing through the FreeSurfer path can fail this way, and a dropped
+    flag would silently exit 0 via fMRIPrep's own ribbon mask instead.
     """
-    output = tmp_path / "qc.gif"
-    fs_dir = (
-        derivatives_misaligned / "sourcedata" / "freesurfer" / "sub-01"
-    )
+    fs_dir = tmp_path / "no_ribbon_here"
+    fs_dir.mkdir()
     exit_code = main(
         [
-            str(derivatives_misaligned), "--subject", "01",
-            "-o", str(output), "--n-cuts", "3", "--fs-dir", str(fs_dir),
+            str(derivatives), "--subject", "01",
+            "-o", str(tmp_path / "qc.gif"), "--fs-dir", str(fs_dir),
         ]
     )
-    assert exit_code == 0
-    assert output.is_file()
+    assert exit_code == 1
+    assert "ribbon.mgz" in capsys.readouterr().err
 
 
-def test_explicit_ribbon_flag_is_used(derivatives, tmp_path):
-    output = tmp_path / "qc.gif"
-    ribbon = (
-        derivatives / "sub-01" / "anat" / "sub-01_desc-ribbon_mask.nii.gz"
-    )
+def test_explicit_ribbon_flag_is_used(derivatives, tmp_path, capsys):
+    """--ribbon must not be silently ignored in favour of automatic
+    discovery. `derivatives` has a discoverable desc-ribbon_mask, so a
+    passing case here could not tell "the flag was honoured" from "the flag
+    was dropped and discovery ran instead" -- both would exit 0. Pointing
+    --ribbon at a path that does not exist is the discriminating case: it
+    can only fail if that exact path is loaded directly.
+    """
+    missing = tmp_path / "does-not-exist.nii.gz"
     exit_code = main(
         [
-            str(derivatives), "--subject", "01", "-o", str(output),
-            "--n-cuts", "3", "--ribbon", str(ribbon),
+            str(derivatives), "--subject", "01", "-o", str(tmp_path / "qc.gif"),
+            "--n-cuts", "3", "--ribbon", str(missing),
         ]
     )
-    assert exit_code == 0
-    assert output.is_file()
+    assert exit_code == 1
+    assert str(missing) in capsys.readouterr().err
 
 
 def test_end_to_end_writes_a_gif_and_a_viewer(derivatives, tmp_path):
@@ -228,6 +233,12 @@ def test_mismatched_fs_dir_is_reported_before_rendering(
     presents as a ribbon that lands nowhere on that grid and is reported by
     ribbon.py with a message naming the transform -- earlier, and more
     specifically, than before.
+
+    "from-fsnative_to-T1w" (from the transform's filename) is what actually
+    pins this down: resolve_fs_dir's own FreeSurferNotFoundError also
+    contains "T1w" and "ribbon.mgz" in its tried-paths listing, so those two
+    substrings alone would not distinguish this message from that unrelated
+    one.
     """
     fs_dir = _write_mismatched_fs_dir(tmp_path)
     for extra in ([], ["--no-upsample"]):
@@ -241,6 +252,36 @@ def test_mismatched_fs_dir_is_reported_before_rendering(
         assert exit_code == 1
         err = capsys.readouterr().err
         assert "T1w" in err and "ribbon.mgz" in err
+        assert "from-fsnative_to-T1w" in err
+
+
+def test_ribbon_flag_with_mismatched_affine_reports_no_overlap(
+    ribbon_mask, derivatives, tmp_path, capsys
+):
+    """--ribbon bypasses ribbon.py's own guards entirely: the given path is
+    loaded and used exactly as given, with no T1w-grid overlap check. So a
+    wildly mismatched affine there is not caught until render_frame calls
+    nilearn's resample_to_img, which raises BoundingBoxError. main's `except
+    BoundingBoxError` clause must precede its general `except ValueError`
+    clause (BoundingBoxError subclasses ValueError) to report
+    NO_OVERLAP_MESSAGE instead of letting nilearn's raw wording through --
+    this is the only test in the suite that still reaches that branch, since
+    Task 5 retargeted the --fs-dir tests that used to.
+    """
+    shifted_affine = ribbon_mask.affine.copy()
+    shifted_affine[:3, 3] += 1000.0
+    shifted = nib.Nifti1Image(np.asarray(ribbon_mask.dataobj), shifted_affine)
+    ribbon_path = tmp_path / "shifted_ribbon.nii.gz"
+    shifted.to_filename(ribbon_path)
+
+    exit_code = main(
+        [
+            str(derivatives), "--subject", "01",
+            "-o", str(tmp_path / "qc.gif"), "--ribbon", str(ribbon_path),
+        ]
+    )
+    assert exit_code == 1
+    assert NO_OVERLAP_MESSAGE in capsys.readouterr().err
 
 
 def test_cuts_and_masks_are_computed_once_regardless_of_frame_count(
