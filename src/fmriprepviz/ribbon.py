@@ -155,8 +155,12 @@ def _ribbon_from_freesurfer(derivatives_root, subject: str, fs_dir, xfm):
     data = np.asarray(ribbon_img.dataobj)
     _require_gray_matter_labels(data, ribbon_path)
 
+    # float32, not uint8: nitransforms.resampling.apply propagates the
+    # moving image's dtype through map_coordinates, so an integer mask here
+    # would round every interpolated value back to a staircase, silently
+    # discarding the sub-voxel accuracy order=1 is meant to provide.
     gray = nib.Nifti1Image(
-        np.isin(data, RIBBON_LABELS).astype(np.uint8), ribbon_img.affine
+        np.isin(data, RIBBON_LABELS).astype(np.float32), ribbon_img.affine
     )
     # The ITK file stores the point map from the T1w (fixed) image to fsnative
     # (moving), which is the direction resampling.apply pulls, so it is used
