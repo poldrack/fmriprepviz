@@ -21,7 +21,7 @@
 - **Never weaken an existing test to make it pass.** Where behaviour genuinely changes, rewrite the test and its docstring to state the new behaviour and why.
 - Run `uv run pytest` after every implementation step. Run all commands through `uv run`.
 - Conventional commits. This repo spells the docs type `docs:` (not `doc:`). Types in use: `feat`, `fix`, `rf`, `test`, `docs`, `style`, `build`, `chore`.
-- TDD: the failing test is committed before the change that makes it pass, in a separate commit.
+- TDD: for changes under `src/`, the failing test is committed before the change that makes it pass, in a separate commit. A fixture-only task commits its tests and the fixtures they verify together — the two are one deliverable, and the RED state there is an import error rather than a behavioural failure, so splitting it demonstrates nothing.
 - `npx --yes prettier -w <file>` before committing any Markdown, YAML, or JSON.
 - Never let a task end with the suite red. New functions are added alongside old ones and the switchover happens in Task 5.
 
