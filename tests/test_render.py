@@ -182,10 +182,11 @@ def test_contours_land_on_the_anatomy_not_merely_somewhere(ribbon_mask, boldrefs
     ship looking correct to both and only be visible here.
 
     The synthetic fixture makes this tractable: the boldref's bright disc
-    and the pial mask share a 40 mm radius (PIAL_RADIUS_MM), so on a single
-    axial cut through the sphere's centre (z=0, its widest cross-section),
-    the outer red ring must sit right on the bright disc's edge. This
-    compares their positions along the frame's central row.
+    and the ribbon mask's outer (pial) boundary share a 40 mm radius
+    (PIAL_RADIUS_MM), so on a single axial cut through the sphere's centre
+    (z=0, its widest cross-section), the outer red ring must sit right on
+    the bright disc's edge. This compares their positions along the frame's
+    central row.
 
     Tolerance: one BOLD voxel's width, converted to pixels using the
     disc's own measured width (rather than a hard-coded pixel count) --

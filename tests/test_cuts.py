@@ -61,8 +61,9 @@ def test_single_cut_lands_at_the_centre_not_the_edge(ribbon_mask):
     """np.linspace(low, high, 1) returns [low], so asking for one cut used to
     give the outermost slice of the central band rather than the middle of the
     brain -- the least informative slice available, and the opposite of what
-    "show me one slice" means. The synthetic pial mask is a sphere centred on
-    the world origin, so every axis's single cut must sit at 0.
+    "show me one slice" means. The synthetic ribbon mask is a gray-matter
+    shell centred on the world origin, so every axis's single cut must sit
+    at 0.
     """
     cuts = select_cuts(ribbon_mask, n_cuts=1)
     for mode, values in cuts.items():

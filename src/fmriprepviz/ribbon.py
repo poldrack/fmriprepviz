@@ -1,9 +1,9 @@
 """Derive the cortical gray-matter ribbon mask, always in the T1w space.
 
-The mask is a filled binary (or, after resampling, continuous 0..1) volume:
-gray matter is a sheet, so contouring it at level 0.5 at render time traces
-the white surface along its inner boundary and the pial along its outer, and
-no separate boundary extraction happens here.
+The mask is a binary (or, after resampling, continuous 0..1) volume: gray
+matter is a sheet, so contouring it at level 0.5 at render time traces the
+white surface along its inner boundary and the pial along its outer, and no
+separate boundary extraction happens here.
 """
 
 from __future__ import annotations
