@@ -1,14 +1,14 @@
-"""Derive white and pial surface masks from FreeSurfer's ribbon.mgz.
+"""Derive the cortical gray-matter ribbon mask, always in the T1w space.
 
-The masks are filled binary volumes. Their boundaries — the surfaces we
-actually want to draw — are produced by contouring them at level 0.5 at
-render time, so no boundary extraction happens here.
+The mask is a filled binary (or, after resampling, continuous 0..1) volume:
+gray matter is a sheet, so contouring it at level 0.5 at render time traces
+the white surface along its inner boundary and the pial along its outer, and
+no separate boundary extraction happens here.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 import nibabel as nib
@@ -19,9 +19,6 @@ from nitransforms.resampling import apply as nt_apply
 from fmriprepviz.discovery import AnatNotFoundError, find_unique_anat
 
 RIBBON_RELATIVE_PATH = Path("mri") / "ribbon.mgz"
-WHITE_LABELS = (2, 41)
-GRAY_LABELS = (3, 42)
-CORTICAL_LABELS = WHITE_LABELS + GRAY_LABELS
 
 # The mask's boundary -- the surface we actually draw -- is its 0.5 level set.
 # Stated once here because render.py contours at it and cuts.py and render.py
@@ -36,14 +33,6 @@ FS_TO_T1W_PATTERN = "*_from-fsnative_to-T1w_mode-image_xfm.txt"
 
 class FreeSurferNotFoundError(RuntimeError):
     """No FreeSurfer subject directory containing a ribbon could be used."""
-
-
-@dataclass(frozen=True)
-class SurfaceMasks:
-    """Filled binary masks whose contours are the white and pial surfaces."""
-
-    white: nib.Nifti1Image
-    pial: nib.Nifti1Image
 
 
 def resolve_fs_dir(derivatives_root, subject: str, fs_dir=None) -> Path:
@@ -70,20 +59,6 @@ def _fs_dir_candidates(derivatives_root, subject: str, fs_dir) -> list[Path]:
     if subjects_dir:
         candidates.append(Path(subjects_dir) / f"sub-{subject}")
     return candidates
-
-
-def load_surface_masks(fs_dir) -> SurfaceMasks:
-    """Build filled white and pial masks from a FreeSurfer ribbon."""
-    ribbon_path = Path(fs_dir) / RIBBON_RELATIVE_PATH
-    if not ribbon_path.is_file():
-        raise FreeSurferNotFoundError(f"Expected a ribbon at {ribbon_path}")
-    ribbon = nib.load(ribbon_path)
-    data = np.asarray(ribbon.dataobj)
-    _require_cortical_labels(data, ribbon_path)
-    return SurfaceMasks(
-        white=_mask_image(np.isin(data, WHITE_LABELS), ribbon.affine),
-        pial=_mask_image(np.isin(data, WHITE_LABELS + GRAY_LABELS), ribbon.affine),
-    )
 
 
 def load_ribbon_mask(
@@ -195,26 +170,4 @@ def _require_overlap_on_the_t1w_grid(
             f"grid after applying {xfm_path}. This usually means --fs-dir "
             "points at a different subject, or that transform does not "
             "relate these two images."
-        )
-
-
-def _mask_image(mask: np.ndarray, affine: np.ndarray) -> nib.Nifti1Image:
-    return nib.Nifti1Image(mask.astype(np.uint8), affine)
-
-
-def _require_cortical_labels(data: np.ndarray, ribbon_path: Path) -> None:
-    """Fail clearly if none of the expected cortical labels are present.
-
-    Without this check, a ribbon with no matching voxels (a failed
-    recon-all, or an aseg.mgz mistaken for the ribbon) silently produces
-    all-zero masks, and the eventual failure is numpy's opaque "zero-size
-    array to reduction operation minimum which has no identity" once cuts
-    are derived from the empty pial mask.
-    """
-    if not np.isin(data, CORTICAL_LABELS).any():
-        raise FreeSurferNotFoundError(
-            f"{ribbon_path} contains none of the expected cortical labels "
-            f"{CORTICAL_LABELS}. This usually means recon-all failed, or "
-            "--fs-dir points at a whole-brain segmentation (aseg.mgz) "
-            "rather than the cortical ribbon (ribbon.mgz)."
         )
