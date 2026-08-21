@@ -137,9 +137,15 @@ gray, 41 = right white matter, 42 = right cortical gray. Therefore:
 - white surface = boundary of `{2, 41}`
 - pial surface = boundary of `{2, 3, 41, 42}`
 
-`ribbon.mgz` carries a scanner-RAS affine matching fMRIPrep's
-`desc-preproc_T1w`, so no manual `c_ras` correction is required; nilearn
-resamples the masks onto each display plane itself.
+> **Superseded.** This section originally claimed that `ribbon.mgz` carries a
+> scanner-RAS affine matching fMRIPrep's `desc-preproc_T1w`, so that no
+> alignment step was required. That is false whenever `recon-all` ran outside
+> fMRIPrep: the two are then different physical spaces, measured at ~19 mm
+> apart on a real dataset, and the contours land on the wrong tissue without
+> any error being raised. See
+> [the 2026-08-21 alignment design](2026-08-21-fsnative-to-t1w-alignment-design.md)
+> for the correction, which also replaces the white/pial mask pair with a single
+> cortical ribbon mask.
 
 ### `cuts.py`
 
