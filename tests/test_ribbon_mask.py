@@ -2,7 +2,13 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from conftest import ANAT_OFFSET_MM, PIAL_RADIUS_MM, RIBBON_VOXEL_SIZE, WHITE_RADIUS_MM
+from conftest import (
+    ANAT_FRACTIONAL_OFFSET_MM,
+    ANAT_OFFSET_MM,
+    PIAL_RADIUS_MM,
+    RIBBON_VOXEL_SIZE,
+    WHITE_RADIUS_MM,
+)
 from fmriprepviz.discovery import AmbiguousAnatError
 from fmriprepviz.ribbon import (
     MASK_THRESHOLD,
@@ -126,9 +132,76 @@ def test_fallback_applies_the_transform_in_the_right_direction(
         "ribbon left at its uncorrected fsnative position: the transform was "
         "dropped"
     )
-    assert abs(actual[1] + ANAT_OFFSET_MM) > ANAT_OFFSET_MM / 2, (
+    assert abs(actual[1] - 2 * ANAT_OFFSET_MM) > ANAT_OFFSET_MM / 2, (
         "ribbon moved the wrong way: the transform was inverted"
     )
+
+
+def test_fallback_mask_is_not_binary_at_a_fractional_offset(
+    derivatives_misaligned_fractional,
+):
+    """A dtype that silently discards interpolation is invisible on a
+    whole-voxel offset: map_coordinates never has to interpolate when the
+    displacement lands exactly on a voxel boundary, so a staircase and a
+    true sub-voxel level set produce identical output there. This fixture's
+    offset does not land on a voxel boundary, so it is the one that can
+    actually tell them apart.
+    """
+    fs_dir = (
+        derivatives_misaligned_fractional
+        / "sourcedata"
+        / "freesurfer"
+        / "sub-01"
+    )
+    fallback = load_ribbon_mask(
+        derivatives_misaligned_fractional, "01", fs_dir=fs_dir
+    )
+    data = np.asarray(fallback.dataobj)
+    assert np.any((data > 0) & (data < 1)), (
+        "fallback mask contains no values strictly between 0 and 1: "
+        "interpolation was discarded, most likely by resampling an "
+        "integer-dtype moving image"
+    )
+
+
+def test_fallback_applies_the_transform_in_the_right_direction_at_a_fractional_offset(
+    derivatives_misaligned_fractional,
+):
+    """The sign trap repeated where resampling actually interpolates.
+
+    ANAT_OFFSET_MM lands on a whole voxel, so the direction check above
+    could in principle pass even if interpolation itself were broken. This
+    fixture's fractional offset forces map_coordinates to interpolate, so
+    this is the direction check that depends on order=1 actually working.
+    """
+    fs_dir = (
+        derivatives_misaligned_fractional
+        / "sourcedata"
+        / "freesurfer"
+        / "sub-01"
+    )
+    fast = load_ribbon_mask(derivatives_misaligned_fractional, "01")
+    fallback = load_ribbon_mask(
+        derivatives_misaligned_fractional, "01", fs_dir=fs_dir
+    )
+
+    expected = _centroid(fast)
+    actual = _centroid(fallback)
+    assert np.allclose(actual, expected, atol=RIBBON_VOXEL_SIZE), (
+        f"aligned ribbon centroid {actual} does not match the fMRIPrep "
+        f"mask's {expected}"
+    )
+    assert (
+        abs(actual[1] - ANAT_FRACTIONAL_OFFSET_MM)
+        > ANAT_FRACTIONAL_OFFSET_MM / 2
+    ), (
+        "ribbon left at its uncorrected fsnative position: the transform "
+        "was dropped"
+    )
+    assert (
+        abs(actual[1] - 2 * ANAT_FRACTIONAL_OFFSET_MM)
+        > ANAT_FRACTIONAL_OFFSET_MM / 2
+    ), "ribbon moved the wrong way: the transform was inverted"
 
 
 def test_explicit_xfm_selects_the_freesurfer_path(derivatives_misaligned):

@@ -29,6 +29,12 @@ PIAL_RADIUS_MM = 40.0
 # fail loudly rather than hide inside a tolerance.
 ANAT_OFFSET_MM = 20.0
 
+# Like ANAT_OFFSET_MM, but not a whole number of voxels at RIBBON_VOXEL_SIZE.
+# ANAT_OFFSET_MM alone can't catch a resampled mask that silently collapses
+# to an integer dtype: at a whole-voxel offset map_coordinates never has to
+# interpolate, so a staircase and a true level set look identical.
+ANAT_FRACTIONAL_OFFSET_MM = 20.5
+
 # (session, task, run) for each space-T1w boldref in the synthetic tree.
 # run-10 is present so ordering tests can catch naive string sorting.
 BOLDREF_ENTITIES = [
@@ -203,6 +209,23 @@ def derivatives_misaligned(tmp_path_factory) -> Path:
     _write_boldrefs(root)
     _write_ribbon(root, offset_mm=ANAT_OFFSET_MM)
     _write_anat(root, offset_mm=ANAT_OFFSET_MM)
+    return root
+
+
+@pytest.fixture(scope="session")
+def derivatives_misaligned_fractional(tmp_path_factory) -> Path:
+    """Like `derivatives_misaligned`, but offset by a fractional number of
+    voxels so resampling must actually interpolate.
+
+    `derivatives_misaligned` alone cannot catch a mask that silently loses
+    its sub-voxel precision to an integer dtype: at a whole-voxel offset,
+    map_coordinates never interpolates, so a staircase and a true level set
+    produce the same output.
+    """
+    root = tmp_path_factory.mktemp("misaligned_fractional")
+    _write_boldrefs(root)
+    _write_ribbon(root, offset_mm=ANAT_FRACTIONAL_OFFSET_MM)
+    _write_anat(root, offset_mm=ANAT_FRACTIONAL_OFFSET_MM)
     return root
 
 
