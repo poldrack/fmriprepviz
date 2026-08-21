@@ -1,21 +1,6 @@
-import numpy as np
 import pytest
 
-from conftest import PIAL_RADIUS_MM, RIBBON_VOXEL_SIZE, WHITE_RADIUS_MM
-from fmriprepviz.ribbon import (
-    FreeSurferNotFoundError,
-    load_surface_masks,
-    resolve_fs_dir,
-)
-
-TOLERANCE_MM = 2 * RIBBON_VOXEL_SIZE
-
-
-def _outer_radius(mask_img):
-    ijk = np.argwhere(np.asarray(mask_img.dataobj) > 0)
-    homogeneous = np.column_stack([ijk, np.ones(len(ijk))])
-    world = (mask_img.affine @ homogeneous.T).T[:, :3]
-    return np.linalg.norm(world, axis=1).max()
+from fmriprepviz.ribbon import FreeSurferNotFoundError, resolve_fs_dir
 
 
 def test_resolves_the_freesurfer_dir_inside_sourcedata(derivatives):
@@ -45,69 +30,3 @@ def test_unresolvable_fs_dir_lists_every_path_tried(tmp_path, monkeypatch):
     message = str(excinfo.value)
     assert "sourcedata" in message
     assert "ribbon.mgz" in message
-
-
-def test_white_mask_covers_only_white_matter_labels(surface_masks):
-    assert _outer_radius(surface_masks.white) < WHITE_RADIUS_MM
-
-
-def test_white_mask_reaches_the_white_surface(surface_masks):
-    assert _outer_radius(surface_masks.white) > WHITE_RADIUS_MM - TOLERANCE_MM
-
-
-def test_pial_mask_reaches_the_pial_surface(surface_masks):
-    outer = _outer_radius(surface_masks.pial)
-    assert outer < PIAL_RADIUS_MM
-    assert outer > PIAL_RADIUS_MM - TOLERANCE_MM
-
-
-def test_pial_mask_is_filled_and_contains_the_white_mask(surface_masks):
-    white = np.asarray(surface_masks.white.dataobj) > 0
-    pial = np.asarray(surface_masks.pial.dataobj) > 0
-    assert np.all(pial[white])
-    assert pial.sum() > white.sum()
-
-
-def test_masks_keep_the_ribbon_affine(derivatives, surface_masks):
-    import nibabel as nib
-
-    ribbon = nib.load(
-        derivatives / "sourcedata" / "freesurfer" / "sub-01" / "mri" / "ribbon.mgz"
-    )
-    assert np.allclose(surface_masks.white.affine, ribbon.affine)
-    assert np.allclose(surface_masks.pial.affine, ribbon.affine)
-
-
-def test_missing_ribbon_is_reported(tmp_path):
-    fs_dir = tmp_path / "sub-01"
-    (fs_dir / "mri").mkdir(parents=True)
-    with pytest.raises(FreeSurferNotFoundError) as excinfo:
-        load_surface_masks(fs_dir)
-    assert "ribbon.mgz" in str(excinfo.value)
-
-
-def test_ribbon_without_cortical_labels_is_reported(tmp_path):
-    """A ribbon.mgz with none of labels 2/3/41/42 -- a failed recon-all, or
-    an aseg.mgz renamed to look like a ribbon -- must be reported clearly.
-    Without this check, load_surface_masks silently builds all-zero masks,
-    and the failure only surfaces much later as numpy's opaque "zero-size
-    array to reduction operation minimum which has no identity" when cuts
-    are derived from the (empty) pial mask.
-    """
-    import nibabel as nib
-    import numpy as np
-
-    fs_dir = tmp_path / "sub-01"
-    mri = fs_dir / "mri"
-    mri.mkdir(parents=True)
-    ribbon_path = mri / "ribbon.mgz"
-    # Label 4 (left lateral ventricle) is a real FreeSurfer aseg label but
-    # none of the cortical ribbon labels this tool looks for.
-    data = np.full((10, 10, 10), 4, dtype=np.uint8)
-    nib.MGHImage(data, np.eye(4)).to_filename(ribbon_path)
-
-    with pytest.raises(FreeSurferNotFoundError) as excinfo:
-        load_surface_masks(fs_dir)
-    message = str(excinfo.value)
-    assert str(ribbon_path) in message
-    assert "2" in message and "3" in message and "41" in message and "42" in message

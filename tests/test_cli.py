@@ -7,7 +7,6 @@ import pytest
 from PIL import Image
 
 from fmriprepviz.cli import build_parser, main
-from fmriprepviz.render import NO_OVERLAP_MESSAGE
 
 
 def test_parser_defaults():
@@ -26,6 +25,70 @@ def test_parser_accepts_multiple_sessions():
         ["/derivs", "--subject", "01", "--ses", "01", "02"]
     )
     assert args.ses == ["01", "02"]
+
+
+def test_parser_accepts_the_new_ribbon_flags():
+    args = build_parser().parse_args(
+        [
+            "/derivs", "--subject", "01",
+            "--ribbon", "/tmp/r.nii.gz",
+            "--fs-to-t1w-xfm", "/tmp/x.txt",
+        ]
+    )
+    assert args.ribbon.name == "r.nii.gz"
+    assert args.fs_to_t1w_xfm.name == "x.txt"
+
+
+def test_end_to_end_on_a_misaligned_tree(derivatives_misaligned, tmp_path):
+    """The whole point: a tree whose FreeSurfer volumes are not aligned with
+    the T1w image must still produce a movie, via fMRIPrep's own T1w-space
+    ribbon mask.
+    """
+    output = tmp_path / "qc.gif"
+    exit_code = main(
+        [
+            str(derivatives_misaligned), "--subject", "01",
+            "-o", str(output), "--n-cuts", "3",
+        ]
+    )
+    assert exit_code == 0
+    assert output.is_file()
+
+
+def test_explicit_fs_dir_uses_the_freesurfer_path(
+    derivatives_misaligned, tmp_path
+):
+    """--fs-dir must not be silently ignored because a desc-ribbon_mask
+    exists, or the FreeSurfer path would be unreachable on a complete tree
+    and could not be compared against the fast path at all.
+    """
+    output = tmp_path / "qc.gif"
+    fs_dir = (
+        derivatives_misaligned / "sourcedata" / "freesurfer" / "sub-01"
+    )
+    exit_code = main(
+        [
+            str(derivatives_misaligned), "--subject", "01",
+            "-o", str(output), "--n-cuts", "3", "--fs-dir", str(fs_dir),
+        ]
+    )
+    assert exit_code == 0
+    assert output.is_file()
+
+
+def test_explicit_ribbon_flag_is_used(derivatives, tmp_path):
+    output = tmp_path / "qc.gif"
+    ribbon = (
+        derivatives / "sub-01" / "anat" / "sub-01_desc-ribbon_mask.nii.gz"
+    )
+    exit_code = main(
+        [
+            str(derivatives), "--subject", "01", "-o", str(output),
+            "--n-cuts", "3", "--ribbon", str(ribbon),
+        ]
+    )
+    assert exit_code == 0
+    assert output.is_file()
 
 
 def test_end_to_end_writes_a_gif_and_a_viewer(derivatives, tmp_path):
@@ -156,56 +219,38 @@ def _write_mismatched_fs_dir(tmp_path):
     return fs_dir
 
 
-def test_default_upsample_reports_a_mismatched_fs_dir_as_no_overlap(
+def test_mismatched_fs_dir_is_reported_before_rendering(
     derivatives, tmp_path, capsys
 ):
-    """With upsampling on (the default), a mismatched --fs-dir trips
-    nilearn's own BoundingBoxError inside resample_to_img before
-    render.render_frame's own NoMaskOverlapError guard is ever reached.
-    The CLI must still report the same clear wording and exit non-zero,
-    not let nilearn's internal exception surface as a traceback.
+    """A --fs-dir pointing at another subject used to reach nilearn, which
+    raised BoundingBoxError while resampling onto the badly shifted mask grid.
+    Now the ribbon is resampled onto the T1w grid first, so the mistake
+    presents as a ribbon that lands nowhere on that grid and is reported by
+    ribbon.py with a message naming the transform -- earlier, and more
+    specifically, than before.
     """
     fs_dir = _write_mismatched_fs_dir(tmp_path)
-    exit_code = main(
-        [
-            str(derivatives), "--subject", "01", "-o", str(tmp_path / "qc.gif"),
-            "--fs-dir", str(fs_dir),
-        ]
-    )
-    assert exit_code == 1
-    assert NO_OVERLAP_MESSAGE in capsys.readouterr().err
-
-
-def test_no_upsample_reports_a_mismatched_fs_dir_as_no_overlap(
-    derivatives, tmp_path, capsys
-):
-    """With --no-upsample, the mismatched --fs-dir trips the identical
-    nilearn BoundingBoxError as the upsampled path above: since Fix 1,
-    --no-upsample also resamples the BOLD reference onto the mask's grid
-    (with nearest-neighbour interpolation, to keep the display pinned
-    across frames), rather than leaving it on its own native grid. The CLI
-    must report the identical wording either way, since from the user's
-    point of view it is the same mistake.
-    """
-    fs_dir = _write_mismatched_fs_dir(tmp_path)
-    exit_code = main(
-        [
-            str(derivatives), "--subject", "01", "-o", str(tmp_path / "qc.gif"),
-            "--fs-dir", str(fs_dir), "--no-upsample",
-        ]
-    )
-    assert exit_code == 1
-    assert NO_OVERLAP_MESSAGE in capsys.readouterr().err
+    for extra in ([], ["--no-upsample"]):
+        exit_code = main(
+            [
+                str(derivatives), "--subject", "01",
+                "-o", str(tmp_path / "qc.gif"), "--fs-dir", str(fs_dir),
+            ]
+            + extra
+        )
+        assert exit_code == 1
+        err = capsys.readouterr().err
+        assert "T1w" in err and "ribbon.mgz" in err
 
 
 def test_cuts_and_masks_are_computed_once_regardless_of_frame_count(
     derivatives, tmp_path, monkeypatch
 ):
     """The registration-check guarantee this tool makes rests on every frame
-    being drawn with the *same* cuts and the *same* surface masks. If a
-    future change derived cuts or masks per boldref instead of once from the
-    ribbon, every frame would silently show slightly different anatomy and
-    the movie would stop being a valid registration test -- while every
+    being drawn with the *same* cuts and the *same* ribbon mask. If a
+    future change derived cuts or the mask per boldref instead of once from
+    the ribbon, every frame would silently show slightly different anatomy
+    and the movie would stop being a valid registration test -- while every
     other test in this suite, which only checks frame counts and file
     existence, would keep passing. This test guards that invariant directly
     by counting calls through a real (not stubbed) end-to-end run.
@@ -213,7 +258,7 @@ def test_cuts_and_masks_are_computed_once_regardless_of_frame_count(
     import fmriprepviz.cli as cli_module
 
     real_select_cuts = cli_module.select_cuts
-    real_load_surface_masks = cli_module.load_surface_masks
+    real_load_ribbon_mask = cli_module.load_ribbon_mask
     cuts_calls = []
     masks_calls = []
 
@@ -221,12 +266,12 @@ def test_cuts_and_masks_are_computed_once_regardless_of_frame_count(
         cuts_calls.append(1)
         return real_select_cuts(*args, **kwargs)
 
-    def counting_load_surface_masks(*args, **kwargs):
+    def counting_load_ribbon_mask(*args, **kwargs):
         masks_calls.append(1)
-        return real_load_surface_masks(*args, **kwargs)
+        return real_load_ribbon_mask(*args, **kwargs)
 
     monkeypatch.setattr(cli_module, "select_cuts", counting_select_cuts)
-    monkeypatch.setattr(cli_module, "load_surface_masks", counting_load_surface_masks)
+    monkeypatch.setattr(cli_module, "load_ribbon_mask", counting_load_ribbon_mask)
 
     output = tmp_path / "qc.gif"
     exit_code = main(
