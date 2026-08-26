@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from nilearn import image, plotting  # noqa: E402
 
+from fmriprepviz.ribbon import MASK_THRESHOLD
+
 FIGSIZE = (12.0, 6.0)
 # Three slices side by side are limited by width, not height, so the tall
 # frame the stacked layout needs would leave over half of this one black.
@@ -23,27 +25,29 @@ SINGLE_CUT_FRAME_SIZE = (
     int(SINGLE_CUT_FIGSIZE[1] * DPI),
 )
 CONTOUR_COLOR = "red"
-CONTOUR_LEVELS = [0.5]
+CONTOUR_LEVELS = [MASK_THRESHOLD]
 CONTOUR_LINEWIDTH = 0.6
 WINDOW_PERCENTILES = (2.0, 98.0)
 
 
 NO_OVERLAP_MESSAGE = (
-    "The pial mask and the BOLD reference do not overlap on the display "
-    "grid. This usually means the FreeSurfer ribbon and the BOLD reference "
-    "have mismatched affines, or that --fs-dir points at the wrong "
-    "FreeSurfer subject directory."
+    "The cortical ribbon mask and the BOLD reference do not overlap on the "
+    "display grid. This usually means the ribbon and the BOLD reference have "
+    "mismatched affines -- a wrong or missing fsnative-to-T1w transform, or "
+    "--fs-dir or --ribbon pointing at the wrong subject."
 )
 
 
 class NoMaskOverlapError(RuntimeError):
-    """The pial mask shares no voxels with the BOLD reference's display grid."""
+    """The ribbon mask shares no voxels with the BOLD reference's display grid."""
 
 
-def render_frame(boldref_img, masks, cuts, label: str, upsample: bool = True) -> bytes:
+def render_frame(
+    boldref_img, ribbon_mask, cuts, label: str, upsample: bool = True
+) -> bytes:
     """Draw one frame and return it as PNG bytes."""
-    display_img = _prepare(boldref_img, masks.pial, upsample)
-    vmin, vmax = _window(display_img, masks.pial)
+    display_img = _prepare(boldref_img, ribbon_mask, upsample)
+    vmin, vmax = _window(display_img, ribbon_mask)
     nrows, ncols = _grid_shape(cuts)
     figsize = SINGLE_CUT_FIGSIZE if _is_single_cut(cuts) else FIGSIZE
     figure, axes = plt.subplots(
@@ -51,7 +55,10 @@ def render_frame(boldref_img, masks, cuts, label: str, upsample: bool = True) ->
     )
     try:
         for axis, (mode, coordinates) in zip(np.atleast_1d(axes), cuts.items()):
-            _draw_row(figure, axis, display_img, masks, mode, coordinates, vmin, vmax)
+            _draw_row(
+                figure, axis, display_img, ribbon_mask, mode, coordinates,
+                vmin, vmax,
+            )
         figure.subplots_adjust(
             left=0, right=1, top=0.94, bottom=0.0, hspace=0.05, wspace=0.02
         )
@@ -88,7 +95,7 @@ def frame_size(cuts) -> tuple[int, int]:
 
 
 def _prepare(boldref_img, reference_img, upsample: bool):
-    """Resample the BOLD onto the anatomical (mask) grid.
+    """Resample the BOLD onto the ribbon mask's grid.
 
     The display grid must be pinned to the same grid for every frame: with
     interpolation switched off, nilearn instead sets each axis's limits from
@@ -98,7 +105,9 @@ def _prepare(boldref_img, reference_img, upsample: bool):
     tool exists to rule out as misregistration. So `upsample` no longer
     decides *whether* to resample, only *how*: `linear` gives a smoothly
     upsampled image, `nearest` keeps voxels visibly blocky (no
-    interpolation) while still pinning the display grid.
+    interpolation) while still pinning the display grid. The ribbon mask
+    now always shares the T1w grid, so the pinned display grid is the T1w
+    grid.
     """
     interpolation = "linear" if upsample else "nearest"
     return image.resample_to_img(
@@ -125,14 +134,16 @@ def _window(display_img, mask_img) -> tuple[float, float]:
         copy_header=True,
     )
     data = np.asarray(display_img.dataobj, dtype=float)
-    inside = data[np.asarray(mask.dataobj) > 0]
+    inside = data[np.asarray(mask.dataobj) >= MASK_THRESHOLD]
     if inside.size == 0:
         raise NoMaskOverlapError(NO_OVERLAP_MESSAGE)
     low, high = np.percentile(inside, WINDOW_PERCENTILES)
     return float(low), float(high)
 
 
-def _draw_row(figure, axis, display_img, masks, mode, coordinates, vmin, vmax):
+def _draw_row(
+    figure, axis, display_img, ribbon_mask, mode, coordinates, vmin, vmax
+):
     display = plotting.plot_anat(
         display_img,
         figure=figure,
@@ -146,13 +157,14 @@ def _draw_row(figure, axis, display_img, masks, mode, coordinates, vmin, vmax):
         draw_cross=False,
         colorbar=False,
     )
-    for mask in (masks.white, masks.pial):
-        display.add_contours(
-            mask,
-            levels=CONTOUR_LEVELS,
-            colors=CONTOUR_COLOR,
-            linewidths=CONTOUR_LINEWIDTH,
-        )
+    # The mask is a gray-matter sheet, so this single level set traces the
+    # white surface along its inner boundary and the pial along its outer.
+    display.add_contours(
+        ribbon_mask,
+        levels=CONTOUR_LEVELS,
+        colors=CONTOUR_COLOR,
+        linewidths=CONTOUR_LINEWIDTH,
+    )
 
 
 def _to_png(figure) -> bytes:

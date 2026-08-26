@@ -6,7 +6,7 @@ import pytest
 from nilearn.image.resampling import BoundingBoxError
 from PIL import Image
 
-from conftest import BOLDREF_VOXEL_SIZE, PIAL_RADIUS_MM
+from conftest import BOLDREF_VOXEL_SIZE, PIAL_RADIUS_MM, WHITE_RADIUS_MM
 from fmriprepviz.cuts import select_cuts
 from fmriprepviz.discovery import find_boldrefs
 from fmriprepviz.render import (
@@ -15,14 +15,13 @@ from fmriprepviz.render import (
     frame_size,
     render_frame,
 )
-from fmriprepviz.ribbon import SurfaceMasks
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 @pytest.fixture(scope="module")
-def cuts(surface_masks):
-    return select_cuts(surface_masks.pial, n_cuts=5)
+def cuts(ribbon_mask):
+    return select_cuts(ribbon_mask, n_cuts=5)
 
 
 @pytest.fixture(scope="module")
@@ -83,49 +82,86 @@ def _sphere_boldref(shape, voxel_size=3.0, radius_mm=PIAL_RADIUS_MM, seed=0):
     return nib.Nifti1Image(data, affine)
 
 
-def test_returns_png_bytes(derivatives, surface_masks, cuts, boldrefs):
+def test_returns_png_bytes(derivatives, ribbon_mask, cuts, boldrefs):
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     assert png.startswith(PNG_MAGIC)
 
 
-def test_frame_has_the_fixed_size(surface_masks, cuts, boldrefs):
+def test_frame_has_the_fixed_size(ribbon_mask, cuts, boldrefs):
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     assert Image.open(io.BytesIO(png)).size == FRAME_SIZE
 
 
-def test_every_frame_has_identical_dimensions(surface_masks, cuts, boldrefs):
+def test_every_frame_has_identical_dimensions(ribbon_mask, cuts, boldrefs):
     """GIF and MP4 assembly require it, so it is checked rather than assumed."""
     sizes = {
         Image.open(
-            io.BytesIO(render_frame(nib.load(ref.path), surface_masks, cuts, ref.label))
+            io.BytesIO(render_frame(nib.load(ref.path), ribbon_mask, cuts, ref.label))
         ).size
         for ref in boldrefs[:3]
     }
     assert sizes == {FRAME_SIZE}
 
 
-def test_rendering_is_deterministic(surface_masks, cuts, boldrefs):
+def test_rendering_is_deterministic(ribbon_mask, cuts, boldrefs):
     first = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     second = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     assert np.array_equal(_as_array(first), _as_array(second))
 
 
-def test_frame_contains_red_contour_pixels(surface_masks, cuts, boldrefs):
+def test_frame_contains_red_contour_pixels(ribbon_mask, cuts, boldrefs):
     """The background is grayscale, so any strongly red pixel is a contour."""
     pixels = _as_array(
-        render_frame(nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label)
+        render_frame(nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label)
     ).astype(int)
     red, green, blue = pixels[..., 0], pixels[..., 1], pixels[..., 2]
     reddish = (red > 120) & (red - green > 60) & (red - blue > 60)
     assert reddish.sum() > 200
+
+
+def test_one_contour_draws_both_the_white_and_pial_boundaries(
+    ribbon_mask, boldrefs
+):
+    """The mask is cortical gray matter, a sheet, so its 0.5 level set has an
+    inner boundary at the white surface and an outer one at the pial. Drawing
+    a single contour must therefore produce two concentric red rings, not one.
+
+    On an axial cut through the sphere's centre the central row crosses four
+    red bands: outer-left, inner-left, inner-right, outer-right. Their
+    distances from the row's centre must match the two known radii. A change
+    that drew only the outer boundary, or filled the sheet, would pass every
+    other test in this file.
+    """
+    png = render_frame(nib.load(boldrefs[0].path), ribbon_mask, {"z": [0.0]}, "label")
+    row = _reddish_mask(png)[_as_array(png).shape[0] // 2]
+    xs = np.where(row)[0]
+    assert xs.size > 0, "no red contour pixels on the central row"
+
+    # Split the run of red pixels into contiguous bands.
+    breaks = np.where(np.diff(xs) > 1)[0]
+    bands = np.split(xs, breaks + 1)
+    assert len(bands) == 4, (
+        f"expected 4 red bands (outer/inner on each side), got {len(bands)}: "
+        f"{[(int(b.min()), int(b.max())) for b in bands]}"
+    )
+
+    centre = (xs.min() + xs.max()) / 2.0
+    outer_px = max(abs(bands[0].mean() - centre), abs(bands[3].mean() - centre))
+    inner_px = min(abs(bands[1].mean() - centre), abs(bands[2].mean() - centre))
+    px_per_mm = outer_px / PIAL_RADIUS_MM
+    measured_inner_mm = inner_px / px_per_mm
+    assert abs(measured_inner_mm - WHITE_RADIUS_MM) <= 2 * BOLDREF_VOXEL_SIZE, (
+        f"inner contour sits at {measured_inner_mm:.1f}mm, expected "
+        f"{WHITE_RADIUS_MM}mm"
+    )
 
 
 def _bright_disc_mask(png_bytes):
@@ -136,7 +172,7 @@ def _bright_disc_mask(png_bytes):
     return grayscale & (red > 100)
 
 
-def test_contours_land_on_the_anatomy_not_merely_somewhere(surface_masks, boldrefs):
+def test_contours_land_on_the_anatomy_not_merely_somewhere(ribbon_mask, boldrefs):
     """Guards the join between mask geometry (verified in test_ribbon.py)
     and red-pixel presence (verified by test_frame_contains_red_contour_pixels
     above): neither of those checks would catch contours drawn at the wrong
@@ -146,10 +182,11 @@ def test_contours_land_on_the_anatomy_not_merely_somewhere(surface_masks, boldre
     ship looking correct to both and only be visible here.
 
     The synthetic fixture makes this tractable: the boldref's bright disc
-    and the pial mask share a 40 mm radius (PIAL_RADIUS_MM), so on a single
-    axial cut through the sphere's centre (z=0, its widest cross-section),
-    the outer red ring must sit right on the bright disc's edge. This
-    compares their positions along the frame's central row.
+    and the ribbon mask's outer (pial) boundary share a 40 mm radius
+    (PIAL_RADIUS_MM), so on a single axial cut through the sphere's centre
+    (z=0, its widest cross-section), the outer red ring must sit right on
+    the bright disc's edge. This compares their positions along the frame's
+    central row.
 
     Tolerance: one BOLD voxel's width, converted to pixels using the
     disc's own measured width (rather than a hard-coded pixel count) --
@@ -159,7 +196,7 @@ def test_contours_land_on_the_anatomy_not_merely_somewhere(surface_masks, boldre
     """
     single_axial_cut = {"z": [0.0]}
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, single_axial_cut, "label"
+        nib.load(boldrefs[0].path), ribbon_mask, single_axial_cut, "label"
     )
     pixels = _as_array(png)
     central_row = pixels.shape[0] // 2
@@ -183,10 +220,10 @@ def test_contours_land_on_the_anatomy_not_merely_somewhere(surface_masks, boldre
     )
 
 
-def test_upsampling_disabled_still_renders(surface_masks, cuts, boldrefs):
+def test_upsampling_disabled_still_renders(ribbon_mask, cuts, boldrefs):
     png = render_frame(
         nib.load(boldrefs[0].path),
-        surface_masks,
+        ribbon_mask,
         cuts,
         boldrefs[0].label,
         upsample=False,
@@ -194,78 +231,54 @@ def test_upsampling_disabled_still_renders(surface_masks, cuts, boldrefs):
     assert Image.open(io.BytesIO(png)).size == FRAME_SIZE
 
 
-def test_one_row_per_display_mode(surface_masks, boldrefs):
+def test_one_row_per_display_mode(ribbon_mask, boldrefs):
     """Fewer orientations must still produce a correctly sized frame."""
-    single = select_cuts(surface_masks.pial, n_cuts=5, display_modes=("z",))
+    single = select_cuts(ribbon_mask, n_cuts=5, display_modes=("z",))
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, single, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, single, boldrefs[0].label
     )
     assert Image.open(io.BytesIO(png)).size == FRAME_SIZE
 
 
-def test_non_overlapping_mask_is_reported(surface_masks, cuts, boldrefs):
-    """A pial mask that shares no voxels with the display grid must raise a
-    clear error rather than silently falling back to whole-volume intensity
-    percentiles (which reintroduces the exact cross-session flicker the
-    windowing is meant to prevent).
-
-    Since Fix 1 (--no-upsample now resamples onto the mask grid too, with
-    nearest-neighbour interpolation, to keep the display pinned across
-    frames -- see test_display_pinned_across_differing_boldref_fov below),
-    a *mismatched-affine* mask no longer reaches this guard at all: nilearn's
-    own resample_to_img raises its own BoundingBoxError while placing the
-    BOLD reference onto the (badly shifted) mask grid, under both upsample
-    values (see test_shifted_mask_now_raises_bounding_box_error_either_way
-    below). What this guard still protects against is a mask that shares the
-    display grid exactly but happens to contain zero foreground voxels
-    (e.g. if SurfaceMasks were ever constructed directly with an empty
-    mask, bypassing ribbon.load_surface_masks's own guard against that).
+def test_non_overlapping_mask_is_reported(ribbon_mask, cuts, boldrefs):
+    """A ribbon mask sharing the display grid exactly but containing no
+    foreground must raise clearly rather than fall back to whole-volume
+    intensity percentiles, which would reintroduce the cross-session flicker
+    the masked windowing exists to prevent.
     """
-    empty_pial = nib.Nifti1Image(
-        np.zeros_like(np.asarray(surface_masks.pial.dataobj)),
-        surface_masks.pial.affine,
+    empty = nib.Nifti1Image(
+        np.zeros_like(np.asarray(ribbon_mask.dataobj)), ribbon_mask.affine
     )
-    empty_masks = SurfaceMasks(white=surface_masks.white, pial=empty_pial)
     with pytest.raises(NoMaskOverlapError):
         render_frame(
-            nib.load(boldrefs[0].path),
-            empty_masks,
-            cuts,
-            boldrefs[0].label,
+            nib.load(boldrefs[0].path), empty, cuts, boldrefs[0].label,
             upsample=False,
         )
 
 
-def test_shifted_mask_now_raises_bounding_box_error_either_way(
-    surface_masks, cuts, boldrefs
+def test_shifted_mask_raises_bounding_box_error_either_way(
+    ribbon_mask, cuts, boldrefs
 ):
-    """Documents a direct consequence of Fix 1: because --no-upsample now
-    always resamples the BOLD reference onto the mask's own grid (only the
-    interpolation mode changes), a totally mismatched mask affine trips
-    nilearn's BoundingBoxError under upsample=False exactly as it already
-    did under upsample=True, rather than reaching this module's own
-    NoMaskOverlapError guard (see test_non_overlapping_mask_is_reported
-    above for what still reaches that guard). test_cli.py's
-    test_no_upsample_reports_a_mismatched_fs_dir_as_no_overlap confirms the
-    CLI still reports the identical wording either way.
+    """A wildly mismatched mask affine trips nilearn's own BoundingBoxError
+    while placing the BOLD reference onto the mask grid, under both upsample
+    values. Reaching render_frame with such a mask is now unusual -- ribbon.py
+    catches a mismatched --fs-dir first -- but render_frame is a public entry
+    point and must still fail cleanly rather than draw nonsense.
     """
-    shifted_affine = surface_masks.pial.affine.copy()
+    shifted_affine = ribbon_mask.affine.copy()
     shifted_affine[:3, 3] += 1000.0
-    shifted_pial = nib.Nifti1Image(
-        np.asarray(surface_masks.pial.dataobj), shifted_affine
+    shifted = nib.Nifti1Image(
+        np.asarray(ribbon_mask.dataobj), shifted_affine
     )
-    shifted_masks = SurfaceMasks(white=surface_masks.white, pial=shifted_pial)
-    with pytest.raises(BoundingBoxError):
-        render_frame(
-            nib.load(boldrefs[0].path),
-            shifted_masks,
-            cuts,
-            boldrefs[0].label,
-            upsample=False,
-        )
+    for upsample in (True, False):
+        with pytest.raises(BoundingBoxError):
+            render_frame(
+                nib.load(boldrefs[0].path), shifted, cuts,
+                boldrefs[0].label, upsample=upsample,
+            )
 
 
-def test_display_pinned_across_differing_boldref_fov(surface_masks, cuts):
+def test_display_pinned_across_differing_boldref_fov(ribbon_mask, cuts):
     """This is the direct expression of the tool's central invariant: masks
     and cuts are computed once and reused for every frame, so anything that
     appears to move between frames must be misregistration, never a display
@@ -286,10 +299,10 @@ def test_display_pinned_across_differing_boldref_fov(surface_masks, cuts):
 
     for upsample in (True, False):
         small_png = render_frame(
-            small_fov, surface_masks, cuts, "small-fov", upsample=upsample
+            small_fov, ribbon_mask, cuts, "small-fov", upsample=upsample
         )
         large_png = render_frame(
-            large_fov, surface_masks, cuts, "large-fov", upsample=upsample
+            large_fov, ribbon_mask, cuts, "large-fov", upsample=upsample
         )
         small_bbox = _reddish_bbox(small_png)
         large_bbox = _reddish_bbox(large_png)
@@ -299,14 +312,14 @@ def test_display_pinned_across_differing_boldref_fov(surface_masks, cuts):
         )
 
 
-def test_label_text_is_drawn_in_the_frame(surface_masks, cuts, boldrefs):
+def test_label_text_is_drawn_in_the_frame(ribbon_mask, cuts, boldrefs):
     """A regression that dropped, mis-coloured or mis-positioned the label
     would pass every other test, yet the label is the only thing telling a
     viewer which session a frame shows.
     """
     boldref = nib.load(boldrefs[0].path)
-    first = _as_array(render_frame(boldref, surface_masks, cuts, "label-one"))
-    second = _as_array(render_frame(boldref, surface_masks, cuts, "label-two"))
+    first = _as_array(render_frame(boldref, ribbon_mask, cuts, "label-one"))
+    second = _as_array(render_frame(boldref, ribbon_mask, cuts, "label-two"))
     top_rows = int(round(FRAME_SIZE[1] * 0.05))
     first_strip = first[:top_rows]
     second_strip = second[:top_rows]
@@ -315,7 +328,7 @@ def test_label_text_is_drawn_in_the_frame(surface_masks, cuts, boldrefs):
     assert second_strip.std() > 0
 
 
-def test_no_colorbar_is_drawn(surface_masks, cuts, boldrefs):
+def test_no_colorbar_is_drawn(ribbon_mask, cuts, boldrefs):
     """nilearn's plot_anat defaults to colorbar=True, adding a per-row
     colorbar whose labelled range is recomputed from each frame's own
     masked intensity window. That per-frame windowing is correct and
@@ -341,7 +354,7 @@ def test_no_colorbar_is_drawn(surface_masks, cuts, boldrefs):
     (shifted) "R" annotation once the colorbar is gone.
     """
     pixels = _as_array(
-        render_frame(nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label)
+        render_frame(nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label)
     )
     strip_width = int(round(FRAME_SIZE[0] * 0.125))
     right_strip = pixels[:, -strip_width:]
@@ -363,7 +376,7 @@ def _content_by_horizontal_third(png_bytes):
 
 
 def test_single_cut_per_orientation_lays_the_panels_side_by_side(
-    surface_masks, boldrefs
+    ribbon_mask, boldrefs
 ):
     """With one cut each, stacking the orientations as rows leaves every panel
     height-limited in a 1200x600 frame -- the slices come out barely larger
@@ -374,9 +387,9 @@ def test_single_cut_per_orientation_lays_the_panels_side_by_side(
     substantial content in the left and right thirds too is what actually
     distinguishes the two layouts.
     """
-    single = select_cuts(surface_masks.pial, n_cuts=1)
+    single = select_cuts(ribbon_mask, n_cuts=1)
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, single, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, single, boldrefs[0].label
     )
     left, middle, right = _content_by_horizontal_third(png)
     assert Image.open(io.BytesIO(png)).size == frame_size(single)
@@ -384,11 +397,11 @@ def test_single_cut_per_orientation_lays_the_panels_side_by_side(
     assert right > 0.25 * middle, f"right third nearly empty: {right} vs {middle}"
 
 
-def test_multi_cut_layout_is_unchanged(surface_masks, cuts, boldrefs):
+def test_multi_cut_layout_is_unchanged(ribbon_mask, cuts, boldrefs):
     """The seven-cut view keeps its row-per-orientation layout; only the
     single-cut case is rearranged."""
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     assert Image.open(io.BytesIO(png)).size == FRAME_SIZE
 
@@ -402,7 +415,7 @@ def _content_rows(png_bytes):
     return rows, body.shape[0]
 
 
-def test_single_cut_frame_is_not_mostly_empty(surface_masks, boldrefs):
+def test_single_cut_frame_is_not_mostly_empty(ribbon_mask, boldrefs):
     """Three slices laid side by side are width-limited, so a 600px-tall frame
     leaves more than half its height black. That dead space shrinks the
     anatomy on screen for any given display width, which is the whole
@@ -414,9 +427,9 @@ def test_single_cut_frame_is_not_mostly_empty(surface_masks, boldrefs):
     height-limited would satisfy a fill-fraction check while making the slices
     smaller, which is the opposite of the point.
     """
-    single = select_cuts(surface_masks.pial, n_cuts=1)
+    single = select_cuts(ribbon_mask, n_cuts=1)
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, single, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, single, boldrefs[0].label
     )
     rows, body_height = _content_rows(png)
     anatomy_height = rows.max() - rows.min()
@@ -429,10 +442,10 @@ def test_single_cut_frame_is_not_mostly_empty(surface_masks, boldrefs):
     assert fill >= 0.75, f"frame is {(1 - fill) * 100:.0f}% empty vertically"
 
 
-def test_multi_cut_frame_size_is_unchanged(surface_masks, cuts, boldrefs):
+def test_multi_cut_frame_size_is_unchanged(ribbon_mask, cuts, boldrefs):
     """Only the single-slice layout is retrimmed; rows of cuts still need the
     taller frame."""
     png = render_frame(
-        nib.load(boldrefs[0].path), surface_masks, cuts, boldrefs[0].label
+        nib.load(boldrefs[0].path), ribbon_mask, cuts, boldrefs[0].label
     )
     assert Image.open(io.BytesIO(png)).size == FRAME_SIZE

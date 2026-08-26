@@ -33,6 +33,14 @@ class NoBoldRefsError(RuntimeError):
     """No usable BOLD reference images were found."""
 
 
+class AnatNotFoundError(RuntimeError):
+    """No anatomical derivative matched the requested pattern."""
+
+
+class AmbiguousAnatError(RuntimeError):
+    """Several anatomical derivatives matched, so the T1w space is ambiguous."""
+
+
 @dataclass(frozen=True)
 class BoldRef:
     """One BOLD reference image and the BIDS entities of its filename."""
@@ -73,6 +81,34 @@ def find_boldrefs(
     if not kept:
         raise NoBoldRefsError(_explain_empty(subject_dir, found, filters))
     return sorted(kept, key=_sort_key)
+
+
+def find_unique_anat(derivatives_root, subject: str, pattern: str) -> Path:
+    """Return the one anat derivative matching `pattern` for this subject.
+
+    fMRIPrep writes anatomical outputs to `sub-<label>/anat/`, or to
+    `sub-<label>/ses-<label>/anat/` when sessions carry their own
+    anatomicals, so the glob covers both rather than assuming either.
+
+    Several matches mean several T1w spaces. Since one mask and one set of
+    cuts are reused for every frame, choosing between them silently would
+    invalidate the comparison the movie exists to make, so it is an error.
+    """
+    subject_dir = Path(derivatives_root) / f"sub-{subject}"
+    matches = sorted(subject_dir.glob(f"**/anat/{pattern}"))
+    if not matches:
+        raise AnatNotFoundError(
+            f"No file matching {pattern} found under {subject_dir}/**/anat/."
+        )
+    if len(matches) > 1:
+        listed = "\n  ".join(str(match) for match in matches)
+        raise AmbiguousAnatError(
+            f"Found {len(matches)} files matching {pattern} under "
+            f"{subject_dir}, so which T1w space to use is ambiguous:\n"
+            f"  {listed}\n"
+            "Pass --ribbon to name the ribbon mask to use."
+        )
+    return matches[0]
 
 
 def _matches(ref: BoldRef, filters: dict[str, Sequence[str] | None]) -> bool:

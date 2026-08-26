@@ -8,3 +8,4 @@ build/
 *.gif
 *.mp4
 *.html
+.superpowers/

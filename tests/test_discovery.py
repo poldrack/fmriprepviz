@@ -1,6 +1,13 @@
 import pytest
 
-from fmriprepviz.discovery import NoBoldRefsError, find_boldrefs, parse_entities
+from fmriprepviz.discovery import (
+    AmbiguousAnatError,
+    AnatNotFoundError,
+    NoBoldRefsError,
+    find_boldrefs,
+    find_unique_anat,
+    parse_entities,
+)
 
 
 def test_parses_bids_entities_from_a_filename():
@@ -143,3 +150,53 @@ def test_ordering_is_stable_regardless_of_filesystem_order(tmp_path, monkeypatch
     monkeypatch.setattr(Path, "glob", reversed_glob)
     second = [ref.path for ref in find_boldrefs(root, "01")]
     assert first == second
+
+
+RIBBON_MASK_PATTERN = "*_desc-ribbon_mask.nii.gz"
+
+
+def test_finds_anat_directly_under_the_subject(derivatives):
+    found = find_unique_anat(derivatives, "01", RIBBON_MASK_PATTERN)
+    assert found.name == "sub-01_desc-ribbon_mask.nii.gz"
+    assert found.parent == derivatives / "sub-01" / "anat"
+
+
+def test_finds_anat_under_a_session_directory(derivatives_session_anat):
+    """fMRIPrep puts anat outputs under ses-<label>/anat when sessions carry
+    their own anatomicals, so this must not require sub-<label>/anat.
+    """
+    found = find_unique_anat(derivatives_session_anat, "01", RIBBON_MASK_PATTERN)
+    assert found.parent.parent.name == "ses-nsdanat"
+
+
+def test_missing_anat_names_the_pattern_and_the_directory(tmp_path):
+    (tmp_path / "sub-01").mkdir()
+    with pytest.raises(AnatNotFoundError) as excinfo:
+        find_unique_anat(tmp_path, "01", RIBBON_MASK_PATTERN)
+    message = str(excinfo.value)
+    assert RIBBON_MASK_PATTERN in message
+    assert "sub-01" in message
+
+
+def test_multiple_anat_matches_are_ambiguous_not_a_guess(tmp_path):
+    """Per-session anatomicals mean several T1w spaces. The tool draws one set
+    of cuts and one mask for every frame, so it cannot pick a space on the
+    user's behalf; it must stop and say so.
+    """
+    for session in ("a", "b"):
+        anat = tmp_path / "sub-01" / f"ses-{session}" / "anat"
+        anat.mkdir(parents=True)
+        (anat / f"sub-01_ses-{session}_desc-ribbon_mask.nii.gz").touch()
+    with pytest.raises(AmbiguousAnatError) as excinfo:
+        find_unique_anat(tmp_path, "01", RIBBON_MASK_PATTERN)
+    message = str(excinfo.value)
+    assert "ses-a" in message and "ses-b" in message
+    assert "--ribbon" in message
+
+
+def test_ambiguous_and_missing_are_distinct_types():
+    """load_ribbon_mask falls through to FreeSurfer when the mask is absent,
+    but must not swallow an ambiguous match, so these cannot share a type.
+    """
+    assert not issubclass(AmbiguousAnatError, AnatNotFoundError)
+    assert not issubclass(AnatNotFoundError, AmbiguousAnatError)

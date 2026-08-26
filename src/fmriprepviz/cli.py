@@ -14,11 +14,7 @@ from fmriprepviz.cuts import DEFAULT_N_CUTS, select_cuts
 from fmriprepviz.discovery import NoBoldRefsError, find_boldrefs
 from fmriprepviz.movie import DEFAULT_FPS, FFmpegNotFoundError, write_movie
 from fmriprepviz.render import NO_OVERLAP_MESSAGE, NoMaskOverlapError, render_frame
-from fmriprepviz.ribbon import (
-    FreeSurferNotFoundError,
-    load_surface_masks,
-    resolve_fs_dir,
-)
+from fmriprepviz.ribbon import load_ribbon_mask
 from fmriprepviz.viewer import write_html
 
 DEFAULT_OUTPUT = Path("qc.gif")
@@ -61,6 +57,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fs-dir", type=Path,
         help="FreeSurfer subject directory containing mri/ribbon.mgz",
+    )
+    parser.add_argument(
+        "--ribbon", type=Path,
+        help=(
+            "explicit cortical ribbon mask, already in the T1w space; "
+            "overrides all automatic discovery"
+        ),
+    )
+    parser.add_argument(
+        "--fs-to-t1w-xfm", type=Path,
+        help=(
+            "fsnative-to-T1w transform (ITK .txt) to place FreeSurfer's "
+            "ribbon.mgz in the T1w space; implies the FreeSurfer path"
+        ),
     )
     parser.add_argument(
         "--no-html", action="store_true", help="skip the HTML viewer"
@@ -108,11 +118,15 @@ def _run(args) -> int:
             "cross-session drift.",
             file=sys.stderr,
         )
-    masks = load_surface_masks(
-        resolve_fs_dir(args.derivatives, args.subject, args.fs_dir)
+    mask = load_ribbon_mask(
+        args.derivatives,
+        args.subject,
+        ribbon=args.ribbon,
+        fs_dir=args.fs_dir,
+        xfm=args.fs_to_t1w_xfm,
     )
-    cuts = _resolve_cuts(args, masks)
-    frames = _render_frames(refs, masks, cuts, upsample=not args.no_upsample)
+    cuts = _resolve_cuts(args, mask)
+    frames = _render_frames(refs, mask, cuts, upsample=not args.no_upsample)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_movie(frames, args.output, fps=args.fps)
     print(f"wrote {args.output}", file=sys.stderr)
@@ -134,11 +148,11 @@ def _validate_fps(fps: int) -> None:
         raise ValueError(f"--fps must be positive, got {fps}.")
 
 
-def _resolve_cuts(args, masks) -> dict[str, list[float]]:
+def _resolve_cuts(args, mask) -> dict[str, list[float]]:
     display_modes = tuple(args.display_mode)
     if args.cut_coords is None:
         return select_cuts(
-            masks.pial, n_cuts=args.n_cuts, display_modes=display_modes
+            mask, n_cuts=args.n_cuts, display_modes=display_modes
         )
     if len(display_modes) != 1:
         raise ValueError(
@@ -148,14 +162,14 @@ def _resolve_cuts(args, masks) -> dict[str, list[float]]:
     return {display_modes[0]: list(args.cut_coords)}
 
 
-def _render_frames(refs, masks, cuts, upsample: bool) -> list[bytes]:
+def _render_frames(refs, mask, cuts, upsample: bool) -> list[bytes]:
     frames = []
     for index, ref in enumerate(refs, start=1):
         label = f"{index}/{len(refs)}  {ref.label}"
         print(f"rendering {label}", file=sys.stderr)
         frames.append(
             render_frame(
-                nib.load(ref.path), masks, cuts, label, upsample=upsample
+                nib.load(ref.path), mask, cuts, label, upsample=upsample
             )
         )
     return frames

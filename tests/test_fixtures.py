@@ -5,6 +5,7 @@ import nibabel as nib
 import numpy as np
 
 from conftest import (
+    ANAT_OFFSET_MM,
     BOLDREF_ENTITIES,
     PIAL_RADIUS_MM,
     RIBBON_ORIGIN,
@@ -64,3 +65,54 @@ def test_ribbon_origin_places_the_sphere_centre_at_the_world_origin(derivatives)
         derivatives / "sourcedata" / "freesurfer" / "sub-01" / "mri" / "ribbon.mgz"
     )
     assert np.allclose(ribbon.affine[:3, 3], RIBBON_ORIGIN)
+
+
+def test_anat_dir_has_a_t1w_space_ribbon_mask(derivatives):
+    mask_path = (
+        derivatives / "sub-01" / "anat" / "sub-01_desc-ribbon_mask.nii.gz"
+    )
+    mask = nib.load(mask_path)
+    data = np.asarray(mask.dataobj)
+    assert set(np.unique(data).tolist()) == {0, 1}
+    radii = _voxel_radii(data > 0, mask.affine)
+    assert radii.max() < PIAL_RADIUS_MM
+    assert radii.max() > PIAL_RADIUS_MM - 2 * RIBBON_VOXEL_SIZE
+    assert radii.min() > WHITE_RADIUS_MM - 2 * RIBBON_VOXEL_SIZE
+
+
+def test_ribbon_mask_shares_the_t1w_grid(derivatives):
+    anat = derivatives / "sub-01" / "anat"
+    mask = nib.load(anat / "sub-01_desc-ribbon_mask.nii.gz")
+    t1w = nib.load(anat / "sub-01_desc-preproc_T1w.nii.gz")
+    assert mask.shape == t1w.shape
+    assert np.allclose(mask.affine, t1w.affine)
+
+
+def test_misaligned_fixture_really_is_misaligned(derivatives_misaligned):
+    """If the offset were ever reduced to zero the sign-trap test in
+    test_ribbon_mask.py would pass whether or not the transform is applied, so
+    the displacement itself is asserted here.
+    """
+    ribbon = nib.load(
+        derivatives_misaligned
+        / "sourcedata" / "freesurfer" / "sub-01" / "mri" / "ribbon.mgz"
+    )
+    data = np.asarray(ribbon.dataobj)
+    ijk = np.argwhere(np.isin(data, (3, 42)))
+    centre = nib.affines.apply_affine(ribbon.affine, ijk).mean(axis=0)
+    assert abs(centre[1] - ANAT_OFFSET_MM) < RIBBON_VOXEL_SIZE
+    assert abs(centre[0]) < RIBBON_VOXEL_SIZE
+    assert abs(centre[2]) < RIBBON_VOXEL_SIZE
+
+
+def test_session_level_anat_tree_puts_anat_under_a_session(
+    derivatives_session_anat,
+):
+    assert not (derivatives_session_anat / "sub-01" / "anat").exists()
+    found = list(
+        (derivatives_session_anat / "sub-01").glob(
+            "**/anat/*_desc-ribbon_mask.nii.gz"
+        )
+    )
+    assert len(found) == 1
+    assert found[0].parent.parent.name == "ses-nsdanat"

@@ -40,15 +40,15 @@ locked to the same tissue boundaries throughout.
 
 ## Key decisions
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Movie axis | Frame = boldref, fixed cuts | Misregistration appears as jitter against a static background; this is the standard registration flipbook. |
-| Space | `space-T1w` only | FreeSurfer surfaces are generated in native anatomical space. Any other space needs a warp we are not doing in v1. |
-| Contour source | `ribbon.mgz` | Matches what fMRIPrep's own reports show, needs only nibabel/nilearn, and avoids mesh-plane intersection geometry. |
-| Frame granularity | One frame per boldref | Averaging runs within a session would hide real within-session misregistration. Filters narrow the set when the movie is too long. |
-| Rendering | nilearn `plot_anat` + `add_contours` | nilearn handles cut placement, orientation, and aspect ratio correctly. Hand-rolled slice display is the usual source of silently left-right-flipped QC figures. |
-| Resampling | BOLD always resampled onto the 1 mm ribbon grid | Contours stay crisp, the background is smooth, and — the load-bearing reason — the display bounds stay pinned across frames. `--no-upsample` switches the interpolation to nearest-neighbour; it does not skip the resample. |
-| File discovery | glob + regex, not pybids | One filename pattern; pybids indexing of a derivatives tree is slow and buys nothing here. |
+| Decision          | Choice                                          | Rationale                                                                                                                                                                                                                    |
+| ----------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Movie axis        | Frame = boldref, fixed cuts                     | Misregistration appears as jitter against a static background; this is the standard registration flipbook.                                                                                                                   |
+| Space             | `space-T1w` only                                | FreeSurfer surfaces are generated in native anatomical space. Any other space needs a warp we are not doing in v1.                                                                                                           |
+| Contour source    | `ribbon.mgz`                                    | Matches what fMRIPrep's own reports show, needs only nibabel/nilearn, and avoids mesh-plane intersection geometry.                                                                                                           |
+| Frame granularity | One frame per boldref                           | Averaging runs within a session would hide real within-session misregistration. Filters narrow the set when the movie is too long.                                                                                           |
+| Rendering         | nilearn `plot_anat` + `add_contours`            | nilearn handles cut placement, orientation, and aspect ratio correctly. Hand-rolled slice display is the usual source of silently left-right-flipped QC figures.                                                             |
+| Resampling        | BOLD always resampled onto the 1 mm ribbon grid | Contours stay crisp, the background is smooth, and — the load-bearing reason — the display bounds stay pinned across frames. `--no-upsample` switches the interpolation to nearest-neighbour; it does not skip the resample. |
+| File discovery    | glob + regex, not pybids                        | One filename pattern; pybids indexing of a derivatives tree is slow and buys nothing here.                                                                                                                                   |
 
 ## Preconditions
 
@@ -86,7 +86,7 @@ reused unchanged for every frame. This is the invariant that makes the movie a
 valid registration test.
 
 **Three things must be held fixed, not two.** The masks and the cut coordinates
-are the obvious pair, but the *display bounds* are a third, and they are easy to
+are the obvious pair, but the _display bounds_ are a third, and they are easy to
 overlook because nothing in the code names them. nilearn derives each axis's
 limits from the bounds of the image drawn on it, so two BOLD references with
 different fields of view render at different zoom — and since the contours are
@@ -137,9 +137,15 @@ gray, 41 = right white matter, 42 = right cortical gray. Therefore:
 - white surface = boundary of `{2, 41}`
 - pial surface = boundary of `{2, 3, 41, 42}`
 
-`ribbon.mgz` carries a scanner-RAS affine matching fMRIPrep's
-`desc-preproc_T1w`, so no manual `c_ras` correction is required; nilearn
-resamples the masks onto each display plane itself.
+> **Superseded.** This section originally claimed that `ribbon.mgz` carries a
+> scanner-RAS affine matching fMRIPrep's `desc-preproc_T1w`, so that no
+> alignment step was required. That is false whenever `recon-all` ran outside
+> fMRIPrep: the two are then different physical spaces, measured at ~19 mm
+> apart on a real dataset, and the contours land on the wrong tissue without
+> any error being raised. See
+> [the 2026-08-21 alignment design](2026-08-21-fsnative-to-t1w-alignment-design.md)
+> for the correction, which also replaces the white/pial mask pair with a single
+> cortical ribbon mask.
 
 ### `cuts.py`
 
@@ -203,11 +209,11 @@ fmriprepviz DERIVATIVES_DIR --subject 01 [-o qc.gif]
 
 ## Outputs
 
-| File | Condition |
-|---|---|
-| `<stem>.gif` | default |
-| `<stem>.mp4` | `-o` ends in `.mp4` and `ffmpeg` is present |
-| `<stem>.html` | unless `--no-html` |
+| File          | Condition                                   |
+| ------------- | ------------------------------------------- |
+| `<stem>.gif`  | default                                     |
+| `<stem>.mp4`  | `-o` ends in `.mp4` and `ffmpeg` is present |
+| `<stem>.html` | unless `--no-html`                          |
 
 ## Error handling
 
@@ -236,18 +242,18 @@ fixture in `conftest.py`:
 
 Because that geometry is known analytically, tests assert that the extracted
 white and pial boundaries lie at the correct radius. This verifies contour
-*placement*, not merely that an image was produced, which is the property that
+_placement_, not merely that an image was produced, which is the property that
 actually matters for a QC tool.
 
-| Module | What is verified |
-|---|---|
+| Module      | What is verified                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discovery` | all boldrefs found; correct ordering including `run-2` before `run-10`; each filter narrows correctly; empty-match error names the spaces present |
-| `ribbon` | label-to-mask mapping; boundary voxels at the known sphere radii; fs-dir resolution order |
-| `cuts` | cuts inside the mask bounding box; deterministic across calls; `n_cuts` respected |
-| `render` | returns valid PNG bytes; every frame has identical dimensions; deterministic for identical input |
-| `movie` | GIF reopens with the expected frame count; MP4 test skipped when `ffmpeg` is absent |
-| `viewer` | HTML contains the expected number of embedded images and every frame label |
-| `cli` | end-to-end on the fixture tree writes both movie and HTML |
+| `ribbon`    | label-to-mask mapping; boundary voxels at the known sphere radii; fs-dir resolution order                                                         |
+| `cuts`      | cuts inside the mask bounding box; deterministic across calls; `n_cuts` respected                                                                 |
+| `render`    | returns valid PNG bytes; every frame has identical dimensions; deterministic for identical input                                                  |
+| `movie`     | GIF reopens with the expected frame count; MP4 test skipped when `ffmpeg` is absent                                                               |
+| `viewer`    | HTML contains the expected number of embedded images and every frame label                                                                        |
+| `cli`       | end-to-end on the fixture tree writes both movie and HTML                                                                                         |
 
 A manual smoke run against real fMRIPrep derivatives provides the visual
 confirmation that the overlay lands correctly. As of this writing no dataset on

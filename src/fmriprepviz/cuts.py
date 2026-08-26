@@ -1,6 +1,6 @@
 """Choose the anatomical locations shown identically in every frame.
 
-The cuts derive from the pial mask alone, so they are the same for every
+The cuts derive from the ribbon mask alone, so they are the same for every
 session. That is what makes the flipbook a registration test: anything that
 moves between frames is the BOLD, not the display.
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
+
+from fmriprepviz.ribbon import MASK_THRESHOLD
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
 DEFAULT_N_CUTS = 1
@@ -36,7 +38,7 @@ def select_cuts(
 
 
 def _world_coordinates(mask_img) -> np.ndarray:
-    ijk = np.argwhere(np.asarray(mask_img.dataobj) > 0)
+    ijk = np.argwhere(np.asarray(mask_img.dataobj) >= MASK_THRESHOLD)
     homogeneous = np.column_stack([ijk, np.ones(len(ijk))])
     return (mask_img.affine @ homogeneous.T).T[:, :3]
 
