@@ -11,7 +11,12 @@ from nibabel.filebasedimages import ImageFileError
 from nilearn.image.resampling import BoundingBoxError
 
 from fmriprepviz.cuts import DEFAULT_N_CUTS, select_cuts
-from fmriprepviz.discovery import NoBoldRefsError, find_boldrefs
+from fmriprepviz.discovery import (
+    DEFAULT_ORDER,
+    SORT_ENTITIES_BY_ORDER,
+    NoBoldRefsError,
+    find_boldrefs,
+)
 from fmriprepviz.movie import DEFAULT_FPS, FFmpegNotFoundError, write_movie
 from fmriprepviz.render import NO_OVERLAP_MESSAGE, NoMaskOverlapError, render_frame
 from fmriprepviz.ribbon import (
@@ -39,6 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ses", nargs="+", help="restrict to these session labels")
     parser.add_argument("--task", nargs="+", help="restrict to these task labels")
     parser.add_argument("--run", nargs="+", help="restrict to these run labels")
+    parser.add_argument(
+        "--order", choices=tuple(SORT_ENTITIES_BY_ORDER), default=DEFAULT_ORDER,
+        help=(
+            "frame order: session first, or task/acquisition/run then session "
+            "for comparing matching runs across sessions (default: session)"
+        ),
+    )
     parser.add_argument(
         "-o", "--output", type=Path, default=DEFAULT_OUTPUT,
         help="output movie; .gif or .mp4 (default: qc.gif)",
@@ -100,7 +112,8 @@ def main(argv=None) -> int:
 def _run(args) -> int:
     _validate_fps(args.fps)
     refs = find_boldrefs(
-        args.derivatives, args.subject, ses=args.ses, task=args.task, run=args.run
+        args.derivatives, args.subject, ses=args.ses, task=args.task, run=args.run,
+        order=args.order,
     )
     if len(refs) == 1:
         print(

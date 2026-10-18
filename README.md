@@ -94,6 +94,7 @@ Useful options:
 | `--ses 01 02` | restrict to these sessions |
 | `--task rest` | restrict to this task |
 | `--run 1` | restrict to this run |
+| `--order task` | group by task, acquisition and run, then step through sessions for each matching run (default: `session`, which groups by session, task, acquisition and run) |
 | `--fs-dir PATH` | FreeSurfer **subject** directory (the one containing `mri/ribbon.mgz`), when it is not at `<fmriprep>/sourcedata/freesurfer/sub-<label>` |
 | `--n-cuts 7` | cuts per orientation (default 1). One cut per orientation gives three large slices through the centre of the brain, side by side. Higher values give more coverage in smaller panels, stacked one row per orientation. |
 | `--display-mode z` | orientations to show, letters from `x`, `y`, `z` |

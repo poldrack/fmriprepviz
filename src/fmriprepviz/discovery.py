@@ -24,7 +24,11 @@ LABEL_EXCLUDED_ENTITIES = frozenset({"sub", "space", "desc"})
 # order. Entities like `dir` or `echo` matter for telling frames apart (so
 # they belong in the label) but not for ordering them, so they are left out
 # here and instead fall through to the final str(path) tie-break below.
-SORT_ENTITIES = ("ses", "task", "acq", "run")
+DEFAULT_ORDER = "session"
+SORT_ENTITIES_BY_ORDER = {
+    "session": ("ses", "task", "acq", "run"),
+    "task": ("task", "acq", "run", "ses"),
+}
 
 _ENTITY_RE = re.compile(r"(?:^|_)(?P<key>[a-zA-Z0-9]+)-(?P<value>[a-zA-Z0-9]+)")
 
@@ -61,8 +65,15 @@ def find_boldrefs(
     ses: Sequence[str] | None = None,
     task: Sequence[str] | None = None,
     run: Sequence[str] | None = None,
+    *,
+    order: str = DEFAULT_ORDER,
 ) -> list[BoldRef]:
     """Return this subject's space-T1w boldrefs, ordered for playback."""
+    if order not in SORT_ENTITIES_BY_ORDER:
+        raise ValueError(
+            f"Unknown frame order '{order}'; use one of "
+            f"{', '.join(SORT_ENTITIES_BY_ORDER)}."
+        )
     subject_dir = Path(derivatives_root) / f"sub-{subject}"
     found = [
         BoldRef(path, parse_entities(path.name))
@@ -72,7 +83,7 @@ def find_boldrefs(
     kept = [ref for ref in found if _matches(ref, filters)]
     if not kept:
         raise NoBoldRefsError(_explain_empty(subject_dir, found, filters))
-    return sorted(kept, key=_sort_key)
+    return sorted(kept, key=lambda ref: _sort_key(ref, order))
 
 
 def _matches(ref: BoldRef, filters: dict[str, Sequence[str] | None]) -> bool:
@@ -82,14 +93,14 @@ def _matches(ref: BoldRef, filters: dict[str, Sequence[str] | None]) -> bool:
     )
 
 
-def _sort_key(ref: BoldRef) -> tuple:
+def _sort_key(ref: BoldRef, order: str = DEFAULT_ORDER) -> tuple:
     # str(ref.path) is a final, total tie-break: without it, refs identical
-    # on every SORT_ENTITIES field (e.g. an AP/PA fieldmap-corrected pair)
+    # on every selected sort field (e.g. an AP/PA fieldmap-corrected pair)
     # would sort however Path.glob happened to yield them, which depends on
     # filesystem/inode order and is not guaranteed stable across machines
     # or after the dataset is re-copied.
     return tuple(
-        _natural(ref.entities.get(key, "")) for key in SORT_ENTITIES
+        _natural(ref.entities.get(key, "")) for key in SORT_ENTITIES_BY_ORDER[order]
     ) + (str(ref.path),)
 
 
